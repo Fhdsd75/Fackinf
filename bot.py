@@ -13,22 +13,23 @@ from telegram.ext import (
     CallbackQueryHandler, ContextTypes, ConversationHandler
 )
 
+# Настройка логирования
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                     level=logging.INFO)
 
-# Определяем состояния:
-# 0: GET_FIRST_NAME, 1: GET_LAST_NAME, 2: GET_CLASS, 3: ADD_CLASS,
-# 4: ADD_ADMIN_USERNAME, 5: ADD_ADMIN_ACCESS, 6: UPLOAD_SCREENSHOT
-GET_FIRST_NAME, GET_LAST_NAME, GET_CLASS, ADD_CLASS, ADD_ADMIN_USERNAME, ADD_ADMIN_ACCESS, UPLOAD_SCREENSHOT = range(7)
+# Состояния для ConversationHandler
+GET_FIRST_NAME, GET_LAST_NAME, GET_CLASS, ADD_CLASS, ADD_ADMIN_ID, ADD_ADMIN_ACCESS, UPLOAD_SCREENSHOT = range(7)
 
-# MAIN_ADMINS согласно требованиям
-MAIN_ADMINS = {6897531034, 6176677671, 1552916570, 1040487188, 1380600483 , 7176188474 , 651856676}
+# Множество главных администраторов (по ID)
+MAIN_ADMINS = {6897531034, 6176677671, 1552916570, 1040487188, 1380600483, 7176188474, 651856676}
 
+# Директории для хранения данных
 PHOTOS_DIR = "photos"
 os.makedirs(PHOTOS_DIR, exist_ok=True)
 TEMP_ZIP_DIR = "temp_zip"
 os.makedirs(TEMP_ZIP_DIR, exist_ok=True)
 
+# Асинхронное удаление файла после задержки
 async def delete_file_after_delay(file_path: str, delay: int):
     await asyncio.sleep(delay)
     try:
@@ -37,6 +38,7 @@ async def delete_file_after_delay(file_path: str, delay: int):
     except Exception as e:
         logging.error(f"Ошибка удаления файла {file_path}: {e}")
 
+# Инициализация базы данных
 def init_db():
     conn = sqlite3.connect('school_bot.db')
     cursor = conn.cursor()
@@ -77,8 +79,7 @@ def init_db():
 
 init_db()
 
-# ===== РЕГИСТРАЦИЯ / ПРОВЕРКА ПОЛЬЗОВАТЕЛЯ =====
-
+# ## Регистрация пользователей
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     conn = sqlite3.connect('school_bot.db')
@@ -139,16 +140,10 @@ async def get_class(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await student_menu(update, context)
     return ConversationHandler.END
 
-# ===== АДМИН ФУНКЦИОНАЛ =====
-
+# ## Админский функционал
 async def sql_all_get(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    conn = sqlite3.connect('school_bot.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM admins WHERE user_id = ?", (user_id,))
-    admin_entry = cursor.fetchone()
-    conn.close()
-    if user_id not in MAIN_ADMINS and not admin_entry:
+    if user_id not in MAIN_ADMINS:
         await update.message.reply_text("У вас нет доступа к этой команде.")
         return
     conn = sqlite3.connect('school_bot.db')
@@ -156,13 +151,12 @@ async def sql_all_get(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor.execute("SELECT name FROM classes")
     classes = [row[0] for row in cursor.fetchall()]
     conn.close()
-    # Компоновка клавиатуры: по 2 кнопки в строке
     keyboard = []
     for i in range(0, len(classes), 2):
         row = []
         row.append(InlineKeyboardButton(classes[i], callback_data=f"class_{classes[i]}"))
-        if i+1 < len(classes):
-            row.append(InlineKeyboardButton(classes[i+1], callback_data=f"class_{classes[i+1]}"))
+        if i + 1 < len(classes):
+            row.append(InlineKeyboardButton(classes[i + 1], callback_data=f"class_{classes[i + 1]}"))
         keyboard.append(row)
     keyboard.append([InlineKeyboardButton("➕ Добавить класс", callback_data="add_class")])
     keyboard.append([InlineKeyboardButton("👤 Управление администраторами", callback_data="manage_admins")])
@@ -209,22 +203,16 @@ async def manage_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
-    await update.callback_query.message.reply_text("Введите @username нового администратора:")
-    return ADD_ADMIN_USERNAME
+    await update.callback_query.message.reply_text("Введите ID нового администратора:")
+    return ADD_ADMIN_ID
 
-async def save_admin_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def save_admin_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    username_input = update.message.text.strip()
-    if not username_input.startswith('@'):
-        await update.message.reply_text("Неверный формат. Введите @username (например, @example):")
-        return ADD_ADMIN_USERNAME
     try:
-        chat = await context.bot.get_chat(username_input)
-    except Exception as e:
-        await update.message.reply_text("Не удалось получить информацию о пользователе. Убедитесь, что пользователь взаимодействовал с ботом.")
-        return ADD_ADMIN_USERNAME
-    admin_id = chat.id
-    context.user_data['new_admin_username'] = username_input
+        admin_id = int(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text("Неверный формат. Введите числовой ID пользователя:")
+        return ADD_ADMIN_ID
     context.user_data['new_admin_id'] = admin_id
     await update.message.delete()
     await context.bot.send_message(chat_id, "Введите классы, к которым дать доступ (через запятую, или 'all' для доступа ко всем классам):")
@@ -240,20 +228,25 @@ async def save_admin_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
         classes = [cls.strip() for cls in access_input.split(',') if cls.strip()]
         class_access = ",".join(classes)
     admin_id = context.user_data.get('new_admin_id')
-    username_input = context.user_data.get('new_admin_username')
     conn = sqlite3.connect('school_bot.db')
     cursor = conn.cursor()
     try:
+        # Пытаемся получить username для записи в базу (опционально)
+        try:
+            chat = await context.bot.get_chat(admin_id)
+            username = chat.username if chat.username else "Не указан"
+        except Exception as e:
+            username = "Не удалось получить"
         cursor.execute("INSERT OR REPLACE INTO admins (user_id, username, class_access) VALUES (?, ?, ?)",
-                       (admin_id, username_input, class_access))
+                       (admin_id, username, class_access))
         conn.commit()
-        await context.bot.send_message(chat_id, f"✅ Администратор {username_input} с ID {admin_id} успешно добавлен с доступом: {class_access}")
+        await context.bot.send_message(chat_id, f"✅ Администратор с ID {admin_id} успешно добавлен с доступом: {class_access}")
     except Exception as e:
         logging.error(f"Ошибка при добавлении администратора: {e}")
         await context.bot.send_message(chat_id, "❌ Ошибка при добавлении администратора.")
     finally:
         conn.close()
-    MAIN_ADMINS.add(admin_id)
+    MAIN_ADMINS.add(admin_id)  # Добавляем ID в множество администраторов
     return ConversationHandler.END
 
 async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -268,8 +261,8 @@ async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i in range(0, len(classes), 2):
         row = []
         row.append(InlineKeyboardButton(classes[i], callback_data=f"class_{classes[i]}"))
-        if i+1 < len(classes):
-            row.append(InlineKeyboardButton(classes[i+1], callback_data=f"class_{classes[i+1]}"))
+        if i + 1 < len(classes):
+            row.append(InlineKeyboardButton(classes[i + 1], callback_data=f"class_{classes[i + 1]}"))
         keyboard.append(row)
     keyboard.append([InlineKeyboardButton("➕ Добавить класс", callback_data="add_class")])
     keyboard.append([InlineKeyboardButton("👤 Управление администраторами", callback_data="manage_admins")])
@@ -337,8 +330,6 @@ async def show_student_profile(update: Update, context: ContextTypes.DEFAULT_TYP
         keyboard.append([InlineKeyboardButton(f"Скрин {i} ({timestamp})", callback_data=f"view_screenshot_{sc_id}")])
     if screenshots:
         keyboard.append([InlineKeyboardButton("📥 Скачать все скриншоты", callback_data=f"download_student_{student_user_id}")])
-    # Новая кнопка для удаления ученика
-    keyboard.append([InlineKeyboardButton("❌ Удалить ученика", callback_data=f"delete_student_{student_id}")])
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data=f"class_{class_name}")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(profile_text, reply_markup=reply_markup)
@@ -362,42 +353,6 @@ async def view_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     await context.bot.send_photo(query.message.chat_id, photo=open(file_path, 'rb'))
 
-async def delete_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    try:
-        student_id = int(query.data.split("_")[2])
-    except (IndexError, ValueError):
-        await query.answer("Некорректные данные.", show_alert=True)
-        return
-    conn = sqlite3.connect('school_bot.db')
-    cursor = conn.cursor()
-    # Получаем класс ученика для обновления списка после удаления
-    cursor.execute("SELECT class FROM students WHERE id = ?", (student_id,))
-    student = cursor.fetchone()
-    if not student:
-        await query.answer("Ученик не найден.", show_alert=True)
-        conn.close()
-        return
-    student_class = student[0]
-    # Получаем пути к файлам скриншотов ученика
-    cursor.execute("SELECT file_path FROM screenshots WHERE user_id = (SELECT user_id FROM students WHERE id = ?)", (student_id,))
-    screenshot_files = cursor.fetchall()
-    # Удаляем скриншоты из базы
-    cursor.execute("DELETE FROM screenshots WHERE user_id = (SELECT user_id FROM students WHERE id = ?)", (student_id,))
-    # Удаляем ученика
-    cursor.execute("DELETE FROM students WHERE id = ?", (student_id,))
-    conn.commit()
-    conn.close()
-    # Удаляем файлы скриншотов с диска
-    for (file_path,) in screenshot_files:
-        try:
-            os.remove(file_path)
-        except Exception as e:
-            logging.error(f"Ошибка удаления файла {file_path}: {e}")
-    await query.message.reply_text("✅ Ученик и все его скриншоты удалены.")
-    # Обновляем список учеников для класса
-    await show_class_students(update, context)
 async def download_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     try:
@@ -421,6 +376,7 @@ async def download_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                        filename=f"student_{student_user_id}_screenshots.zip")
     await query.answer("Архив отправлен.")
     asyncio.create_task(delete_file_after_delay(zip_file, 300))
+
 async def download_class(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     class_name = query.data.split("_", 1)[1]
@@ -435,6 +391,7 @@ async def download_class(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                        filename=f"{class_name}_screenshots.zip")
     await query.answer("Архив отправлен.")
     asyncio.create_task(delete_file_after_delay(zip_file, 300))
+
 async def download_all_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     base_name = os.path.join(TEMP_ZIP_DIR, "all_photos")
@@ -444,6 +401,8 @@ async def download_all_photos(update: Update, context: ContextTypes.DEFAULT_TYPE
                                        filename="all_photos.zip")
     await query.answer("Архив отправлен.")
     asyncio.create_task(delete_file_after_delay(zip_file, 300))
+
+# ## Меню ученика
 async def student_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📚 Задания MODO", callback_data="modo_tasks")],
@@ -452,6 +411,7 @@ async def student_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     chat_id = update.effective_chat.id
     await context.bot.send_message(chat_id, "Выберите действие:", reply_markup=reply_markup)
+
 async def modo_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -463,12 +423,14 @@ async def modo_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await context.bot.send_message(query.message.chat_id, "Выберите действие:", reply_markup=reply_markup)
+
 async def upload_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await query.message.delete()
     await context.bot.send_message(query.message.chat_id, "Пришлите скриншот с результатами теста.")
     return UPLOAD_SCREENSHOT
+
 async def save_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_id = update.message.from_user.id
@@ -495,6 +457,7 @@ async def save_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
     await context.bot.send_message(chat_id, f"✅ Скриншот сохранен! (Дата и время: {upload_timestamp})\nВы можете просмотреть его в своем профиле.")
     return ConversationHandler.END
+
 async def my_screenshots(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     chat_id = query.message.chat_id
@@ -515,13 +478,17 @@ async def my_screenshots(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await context.bot.send_message(chat_id, "Вернуться в меню", reply_markup=reply_markup)
+
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await query.message.delete()
     await student_menu(update, context)
+
+# ## Главная функция
 def main():
-    application = ApplicationBuilder().token("7147486797:AAGqeja-HW0NkuvjnUfS35GoUuqgiqlHoOM").build()
+    application = ApplicationBuilder().token("8172736488:AAF6tSc9TWCviWD8wVzXx6aY1z5MBOmTlWA").build()
+
     registration_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -531,6 +498,7 @@ def main():
         },
         fallbacks=[]
     )
+
     admin_class_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_add_class, pattern='^add_class$')],
         states={
@@ -538,14 +506,16 @@ def main():
         },
         fallbacks=[]
     )
+
     admin_admin_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_add_admin, pattern='^add_admin$')],
         states={
-            ADD_ADMIN_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_admin_username)],
+            ADD_ADMIN_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_admin_id)],
             ADD_ADMIN_ACCESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_admin_access)]
         },
         fallbacks=[]
     )
+
     screenshot_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(upload_screenshot, pattern='^upload_screenshot$')],
         states={
@@ -553,6 +523,7 @@ def main():
         },
         fallbacks=[]
     )
+
     application.add_handler(registration_handler)
     application.add_handler(CommandHandler("sqlallget", sql_all_get))
     application.add_handler(admin_class_handler)
@@ -569,8 +540,9 @@ def main():
     application.add_handler(CallbackQueryHandler(modo_tasks, pattern='^modo_tasks$'))
     application.add_handler(CallbackQueryHandler(my_screenshots, pattern='^my_screenshots$'))
     application.add_handler(CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$'))
-    application.add_handler(CallbackQueryHandler(delete_student, pattern='^delete_student_'))
     application.add_handler(screenshot_handler)
+
     application.run_polling()
+
 if __name__ == '__main__':
     main()
