@@ -582,7 +582,8 @@ async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ## Главная функция
 def main():
-    application = ApplicationBuilder().token("8172736488:AAF6tSc9TWCviWD8wVzXx6aY1z5MBOmTlWA").build()
+    TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+    application = ApplicationBuilder().token(TOKEN).build()
 
     registration_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
